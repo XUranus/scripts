@@ -1,0 +1,41 @@
+#!/bin/sh
+
+# This script is used to automatically download iso from mirror 
+# and make make an archlinux installation usb
+# Usage: sudo ./archusb-maker [device]
+# example: sudo ./archusb-maker /dev/sda
+
+# search latest version
+MIRROR_URL='https://mirrors.163.com/archlinux'
+VERSION_URL=$MIRROR_URL'/iso/latest/arch/version'
+ISO_VERSION=$(curl $VERSION_URL --silent)
+echo 'find latest version: '$ISO_VERSION
+
+# define download url
+ISO_NAME='archlinux-'$ISO_VERSION'-x86_64.iso'
+DOWNLOAD_URL=$MIRROR_URL'/iso/latest/'$ISO_NAME
+
+# check iso exists
+if [ ! -f $ISO_NAME ]; then
+  echo 'download iso from '$DOWNLOAD_URL
+  curl $DOWNLOAD_URL -o $ISO_NAME
+else
+  echo 'iso found: '$ISO_NAME
+fi
+
+USB_DEVICE=$1 # /dev/sdc
+echo 'ready to write '$ISO_NAME' to usb device '$USB_DEVICE', all data on disk will be wiped'
+lsblk | grep ${USB_DEVICE//\/dev\//}
+echo 'press enter to continue.'
+read
+
+# wipe file system
+echo 'wiping file system....'
+sudo umount $USB_DEVICE
+sudo wipefs --all $USB_DEVICE
+
+# dump iso to device
+echo 'making installation usb...'
+sudo dd bs=4M if=$ISO_NAME of=$USB_DEVICE status=progress && sync
+
+echo 'Done.'
