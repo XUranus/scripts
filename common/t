@@ -1,0 +1,27 @@
+#!/bin/bash
+
+## this script is used to auto-detect language (english/chinese) and translate
+## require package: trans
+## usage: t <input>
+
+input=$1
+SOURCE="$0"
+
+while [ -h "$SOURCE"  ]; do # resolve $SOURCE until the file is no longer a symlink
+    DIR="$( cd -P "$( dirname "$SOURCE"  )" && pwd  )"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /*  ]] && SOURCE="$DIR/$SOURCE" # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
+done
+DIR="$( cd -P "$( dirname "$SOURCE"  )" && pwd  )"
+
+## remove chinese
+enStr=$(echo $input | awk '{print gensub(/[^!-~]/,"","g",$0)}')
+
+if [ "$enStr" ] # input contains english
+then
+  trans en:zh-CN $input # translate to chinese
+  echo $input >> $DIR"/en.dic"
+else
+  trans zh-CN:en $input # translate to english
+  echo $input >> $DIR"/ch.dic"
+fi
