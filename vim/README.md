@@ -3,13 +3,14 @@
 ```bash
 git clone https://github.com/XUranus/scripts
 mkdir -p ~/.vim
-cp scripts/.vimrc ~/.vimrc
-cp scripts/coc-settings.json ~/.vim/coc-settings.json
+curl -fLo ~/.vim/autoload/plug.vim --create-dirs https://raw.githubusercontent.com/junegunn/vim-plug/master/plug.vim
+cp scripts/vim/.vimrc ~/.vimrc
+cp scripts/vim/coc-settings.json ~/.vim/coc-settings.json
 ```
 
-enter vim and execute:
+enter vim and execute in command mode:
 ```bash
-PluginInstall
+PlugInstall
 CocInstall coc-sh
 CocInstall coc-clangd  
 CocInstall coc-cmake
