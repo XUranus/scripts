@@ -1,7 +1,7 @@
 # AI Agent
 
 ```
-AG - AI Command Line Assistant powered by Aliyun AI SDK
+AG - AI Command Line Assistant powered by OpenAI SDK
 Usage:
   [command] | ag -d [prompt]
   ag [options]
@@ -9,6 +9,7 @@ Usage:
 Options:
   -m, --model MODEL   Specify LLM model (default: deepseek-r1)
   -d, --prompt PROMPT Task description/prompt (required)
+  --plain             Plain text output
   --clean             Clear session history
   -h, --help          Show this help message
 
@@ -32,7 +33,7 @@ sudo pip install openai python-dotenv -i https://pypi.tuna.tsinghua.edu.cn/simpl
 
 ```bash
 # ~/zsh.rc
-export AG_DASHSCOPE_API_KEY="sk-1234567890987654321"
+export AG_DASHSCOPE_API_KEY="sk-1234567890987654321" # Aliyun key
 export AG_MODEL_DEFAULT="deepseek-r1"
 alias ag='python3 $HOME/scripts/ag/ag.py'
 ```

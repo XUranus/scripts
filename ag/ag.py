@@ -6,6 +6,17 @@ from openai import OpenAI
 import os
 import json
 import tempfile
+from tabulate import tabulate
+import re
+
+# ANSI escape codes for colors
+BLUE = "\033[34m"
+YELLOW = "\033[33m"
+GREEN = "\033[32m"
+GREY = "\033[90m"
+BOLD = "\033[1m"
+ITALIC = "\033[3m"
+RESET = "\033[0m"
 
 # session management0(multiple chats records save to /tmp/.ag_sessions.json)
 SESSION_FILE = os.path.join(tempfile.gettempdir(), ".ag_sessions.json")
@@ -40,6 +51,9 @@ def parse_args():
                        nargs=argparse.REMAINDER,  # capture all args left
                        required=False,
                        help='Task description/prompt')
+    parser.add_argument('--plain',
+                       action='store_true',
+                       help='Plain text output')
     parser.add_argument('--clean',
                        action='store_true',
                        help='Clear session history')
@@ -56,7 +70,51 @@ def parse_args():
     return args
 
 
-def process_request(model, api_key, prompt_text, input_data):
+def process_request(model, api_key, prompt_text, input_data, plain):
+
+    def print_plain_text():
+        response_content = ""
+    
+        for chunk in completion:
+            if chunk.choices:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    print(delta.content, end='', flush=True)
+                    response_content += delta.content
+
+        print("\n")
+        return response_content
+
+
+    def print_styled_text():
+        response_content = ""
+        line_buffer = ""
+        print("="*20 + f" 🤖 ({model}) "+ "="*20)
+
+        for chunk in completion:
+            if chunk.choices:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    # Add new content to buffer
+                    line_buffer += delta.content
+                    # Process complete lines (ending with newline)
+                    while '\n' in line_buffer:
+                        # Split at first newline
+                        line, line_buffer = line_buffer.split('\n', 1)
+                        # Parse and print the complete line
+                        print(parse_markdown(line), flush=True)
+                        # Also store in response_content if needed
+                        response_content += line + '\n'
+
+        # Process any remaining content in buffer after loop
+        if line_buffer:
+            print(parse_markdown(line_buffer), flush=True)
+            response_content += line_buffer
+        
+        print("\n")
+        return response_content
+
+
     input_data = input_data[:57000]
     # print(f'model = {model}, prompt = {prompt_text}, input_data = {input_data}')
     
@@ -86,16 +144,12 @@ def process_request(model, api_key, prompt_text, input_data):
             }
         )
 
-        # streaming output handling
-        print("="*20 + f" 🤖 ({model}) "+ "="*20)
         response_content = ""
-        for chunk in completion:
-            if chunk.choices:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    print(delta.content, end='', flush=True)
-                    response_content += delta.content
-        print("\n")
+        # streaming output handling
+        if plain:
+            response_content = print_plain_text()
+        else:
+            response_content = print_styled_text()
         
         # save session
         messages.append({"role": "assistant", "content": response_content})
@@ -117,6 +171,7 @@ Usage:
 Options:
   -m, --model MODEL   Specify LLM model (default: deepseek-r1)
   -d, --prompt PROMPT Task description/prompt (required)
+  --plain             Plain text output
   --clean             Clear session history
   -h, --help          Show this help message
 
@@ -133,6 +188,37 @@ Available Models:
   qwen-plus
 """
     print(help_text)
+
+
+def parse_markdown(line):
+    # Regular expression patterns
+    url_pattern = r'\[(.*?)\]\((.*?)\)'  # Matches [text](url)
+    headline_patterns = {
+        r'^#{1,3}\s+(.+)$': YELLOW,      # Match single hash for level 1 heading
+        r'^#{4,}\s+(.+)$' : GREEN,      # Match double hash for level 2 heading
+    }
+
+    # Apply URL styling
+    def style_url(match):
+        text = match.group(1)  # Group 1: text inside brackets
+        url = match.group(2)   # Group 2: URL inside parentheses
+        return f"{GREY}[{text}]{BLUE}{ITALIC}({url}){RESET}"  # Wrap URL in blue
+
+    
+    # Apply headline styling
+    for pattern, color in headline_patterns.items():
+        match = re.match(pattern, line)
+        if match:
+            return f"{color}{BOLD}{match.group(1)}{RESET}"
+    
+    # Apply URL styling
+    text = re.sub(url_pattern, style_url, line)
+
+    text = re.sub(r'\*\*(.*?)\*\*', r'\033[1m\1\033[0m', text)  # Bold
+    text = re.sub(r'\*(.*?)\*', r'\033[3m\1\033[0m', text)     # Italic
+
+    return text
+
 
 def main():
     args = parse_args()
@@ -162,7 +248,7 @@ def main():
         print("env AG_DASHSCOPE_API_KEY not provided.")
         sys.exit(1)
 
-    process_request(args.model, api_key, args.prompt, input_data)
+    process_request(args.model, api_key, args.prompt, input_data, args.plain)
 
 if __name__ == "__main__":
     main()
