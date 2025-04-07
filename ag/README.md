@@ -1,5 +1,9 @@
 # AI Agent
 
+
+![](Screenshot.png)
+
+
 ```
 AG - AI Command Line Assistant powered by OpenAI SDK
 Usage:
@@ -25,6 +29,7 @@ Available Models:
   qwen-max-longcontext
   qwen-plus
 ```
+
 
 ### install
 ```bash
