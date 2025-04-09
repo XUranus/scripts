@@ -33,7 +33,7 @@ Available Models:
 
 ### install
 ```bash
-sudo pip install openai python-dotenv -i https://pypi.tuna.tsinghua.edu.cn/simple
+sudo pip install openai python-dotenv tabulate -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 ```bash

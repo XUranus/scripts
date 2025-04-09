@@ -4,10 +4,14 @@ import argparse
 import sys
 from openai import OpenAI
 import os
+import itertools
 import json
 import tempfile
 from tabulate import tabulate
 import re
+import threading
+import time
+import signal
 
 # ANSI escape codes for colors
 BLUE = "\033[34m"
@@ -18,8 +22,16 @@ BOLD = "\033[1m"
 ITALIC = "\033[3m"
 RESET = "\033[0m"
 
+spinner_chars = itertools.cycle(['🕐', '🕑', '🕒', '🕓', '🕔', '🕕', '🕖', '🕗', '🕘', '🕙', '🕚', '🕛'])
+spinner_condition = threading.Condition()
+spinner_exit = False
+server_responded = False
+
+in_codeblocks = False
+
 # session management0(multiple chats records save to /tmp/.ag_sessions.json)
 SESSION_FILE = os.path.join(tempfile.gettempdir(), ".ag_sessions.json")
+
 
 def load_session():
     if os.path.exists(SESSION_FILE):
@@ -72,24 +84,24 @@ def parse_args():
 
 def process_request(model, api_key, prompt_text, input_data, plain):
 
-    def print_plain_text():
-        response_content = ""
-    
-        for chunk in completion:
-            if chunk.choices:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    print(delta.content, end='', flush=True)
-                    response_content += delta.content
+    def render_reponse_text(line: str):
+        # ask spinner to exit
+        global server_responded
+        server_responded = True
+        # block until spinner exit
+        with spinner_condition:
+            while not spinner_exit:
+                spinner_condition.wait()
+        # render text to stdout
+        if not plain:
+            print(parse_markdown(line), flush=True)
+        else:
+            print(line, flush=True)
 
-        print("\n")
-        return response_content
 
-
-    def print_styled_text():
+    def print_response_text():
         response_content = ""
         line_buffer = ""
-        print("="*20 + f" 🤖 ({model}) "+ "="*20)
 
         for chunk in completion:
             if chunk.choices:
@@ -102,13 +114,13 @@ def process_request(model, api_key, prompt_text, input_data, plain):
                         # Split at first newline
                         line, line_buffer = line_buffer.split('\n', 1)
                         # Parse and print the complete line
-                        print(parse_markdown(line), flush=True)
+                        render_reponse_text(line)
                         # Also store in response_content if needed
                         response_content += line + '\n'
 
         # Process any remaining content in buffer after loop
         if line_buffer:
-            print(parse_markdown(line_buffer), flush=True)
+            render_reponse_text(line_buffer)
             response_content += line_buffer
         
         print("\n")
@@ -144,13 +156,9 @@ def process_request(model, api_key, prompt_text, input_data, plain):
             }
         )
 
-        response_content = ""
         # streaming output handling
-        if plain:
-            response_content = print_plain_text()
-        else:
-            response_content = print_styled_text()
-        
+        response_content = print_response_text()
+
         # save session
         messages.append({"role": "assistant", "content": response_content})
         session[model] = messages
@@ -191,6 +199,8 @@ Available Models:
 
 
 def parse_markdown(line):
+    global in_codeblocks
+
     # Regular expression patterns
     url_pattern = r'\[(.*?)\]\((.*?)\)'  # Matches [text](url)
     headline_patterns = {
@@ -204,7 +214,12 @@ def parse_markdown(line):
         url = match.group(2)   # Group 2: URL inside parentheses
         return f"{GREY}[{text}]{BLUE}{ITALIC}({url}){RESET}"  # Wrap URL in blue
 
-    
+    # Codeblocks styling has highest priority
+    if line.startswith('```'):
+        in_codeblocks = not in_codeblocks
+    if in_codeblocks:
+        return f"{ITALIC}{line}{RESET}"
+
     # Apply headline styling
     for pattern, color in headline_patterns.items():
         match = re.match(pattern, line)
@@ -220,7 +235,39 @@ def parse_markdown(line):
     return text
 
 
+
+# print spinner
+def spinner_worker(model: str):
+    start_time = time.time()
+    counter = 1
+    while True:
+        counter += 1
+        now_time = time.time()
+        time_elasped = now_time - start_time
+        sys.stderr.write(f"{ITALIC}{BOLD}{GREY}\r🤖[{model}] thinking ... {next(spinner_chars)} ({time_elasped:.2f}s){RESET}")
+        time.sleep(0.25)
+        if server_responded:
+            # exit spinner
+            with spinner_condition:
+                sys.stderr.write("\r" + " " * 50 + "\r")
+                sys.stderr.write(f"{ITALIC}{BOLD}{GREY}🤖[{model}] answered in {time_elasped:.2f}s ✅\n\r\n💡> {RESET}")
+                sys.stderr.flush()
+                global spinner_exit
+                spinner_exit = True
+                spinner_condition.notify()
+                return
+
+
+def signal_handler(signum, frame):
+    sys.stderr.write(f"Signal {signum} received. Exiting gracefully.{RESET}")
+    sys.stderr.flush()
+    exit(0)
+
+
 def main():
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     args = parse_args()
     
     if args.help:
@@ -248,7 +295,20 @@ def main():
         print("env AG_DASHSCOPE_API_KEY not provided.")
         sys.exit(1)
 
+    global spinner_exit
+    global server_responded
+    global in_codeblocks
+    spinner_exit = False
+    server_responded = False
+    in_codeblocks = False
+    spinner_thread = threading.Thread(
+        target=spinner_worker,
+        args=(args.model,),
+        daemon=True
+    )
+    spinner_thread.start()
     process_request(args.model, api_key, args.prompt, input_data, args.plain)
+    spinner_thread.join()
 
 if __name__ == "__main__":
     main()
