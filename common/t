@@ -7,10 +7,22 @@
 input=$1
 SOURCE="$0"
 
+which trans > /dev/null
+if [ $? -ne 0 ]; then
+    echo '"trans" command not valid: sudo pacman -S translate-toolkit'
+    exit 1
+fi
+
+if [ $# -lt 1 ]; then
+    echo 'need input'
+    exit 1
+fi
+
 while [ -h "$SOURCE"  ]; do # resolve $SOURCE until the file is no longer a symlink
     DIR="$( cd -P "$( dirname "$SOURCE"  )" && pwd  )"
     SOURCE="$(readlink "$SOURCE")"
-    [[ $SOURCE != /*  ]] && SOURCE="$DIR/$SOURCE" # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
+    [[ $SOURCE != /*  ]] && SOURCE="$DIR/$SOURCE"
+    # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
 done
 DIR="$( cd -P "$( dirname "$SOURCE"  )" && pwd  )"
 

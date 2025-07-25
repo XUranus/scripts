@@ -3,10 +3,12 @@
 import argparse
 import sys
 from openai import OpenAI
+from pyfzf.pyfzf import FzfPrompt
 import os
 import itertools
 import json
 import tempfile
+import subprocess
 from tabulate import tabulate
 import re
 import threading
@@ -15,6 +17,7 @@ import signal
 
 # ANSI escape codes for colors
 BLUE = "\033[34m"
+RED = "\033[31m"
 YELLOW = "\033[33m"
 GREEN = "\033[32m"
 GREY = "\033[90m"
@@ -29,23 +32,134 @@ server_responded = False
 
 in_codeblocks = False
 
-# session management0(multiple chats records save to /tmp/.ag_sessions.json)
-SESSION_FILE = os.path.join(tempfile.gettempdir(), ".ag_sessions.json")
-
+# session management (multiple sessions records save to /tmp/.ag/$USER)
+DEFAULT_SESSION = "DEFAULT_SESSION"
+SESSION_DIR = os.path.join("/tmp",".ag", os.getenv("USER"), "sessions")
+# symlink /tmp/.ag/$USER/CURRENT_SESSION ===> /tmp/.ag/$USER/sessions/{SESSION_NAME}
+CURRENT_SESSION_PATH = os.path.join("/tmp", ".ag", os.getenv("USER"), "CURRENT_SESSION")
 
 def load_session():
-    if os.path.exists(SESSION_FILE):
-        with open(SESSION_FILE, 'r') as f:
+    if os.path.exists(CURRENT_SESSION_PATH):
+        with open(CURRENT_SESSION_PATH, 'r') as f:
             return json.load(f)
     return {}
 
+
 def save_session(session):
-    with open(SESSION_FILE, 'w') as f:
+    if not os.path.exists(CURRENT_SESSION_PATH):
+        with open(CURRENT_SESSION_PATH, 'r') as f:
+            return json.load(f)
+    with open(CURRENT_SESSION_PATH, 'w') as f:
         json.dump(session, f)
 
-def clean_session():
-    if os.path.exists(SESSION_FILE):
-        os.remove(SESSION_FILE)
+
+def get_session_name(session_name, args_prompt, stdin_data):
+    if session_name is not None and len(str(session_name)) != 0:
+        return session_name
+    session_name = stdin_data
+    if args_prompt is not None or len(str(args_prompt)) == 0:
+        session_name = args_prompt
+    if session_name is None or len(str(session_name)) == 0:
+        session_name = fzf_select_session()
+    if session_name is None:
+        print('Session name required.')
+        sys.exit(1)
+    return session_name.strip()
+
+
+def clean_session(session_name):
+    try:
+        if str(session_name).upper() == 'ALL':
+            for session_name in os.listdir(SESSION_DIR):
+                session_path = os.path.join(SESSION_DIR, session_name)
+                if os.path.isfile(session_path):
+                    os.remove(session_path)
+            print("All session history cleared.")
+            switch_session(DEFAULT_SESSION)
+        else:
+            session_path = os.path.join(SESSION_DIR, session_name)
+            if os.path.isfile(session_path):
+                os.remove(session_path)
+                print(f'Session [{session_name}] cleared')
+                if os.path.exists(CURRENT_SESSION_PATH) \
+                    and os.path.basename(os.readlink(CURRENT_SESSION_PATH)) == session_name:
+                    switch_session(DEFAULT_SESSION)
+                    print(f'Switch current session to default')
+            else:
+                print('No such session.')
+    except OSError as e:
+        print(f'Clear sesssion {session_name} error: {e}')
+
+
+def switch_session(session_name):
+    try:
+        session_path = os.path.join(SESSION_DIR, session_name)
+        if os.path.exists(session_path):
+            if os.path.islink(CURRENT_SESSION_PATH):
+                os.remove(CURRENT_SESSION_PATH)
+            os.symlink(session_path, CURRENT_SESSION_PATH)
+            print(f'Session switched ==> {session_name}')
+        else:
+            # create new session
+            with open(session_path, 'w') as f:
+                session = {
+                    "messages" : []
+                }
+                json.dump(session, f)
+                pass
+            print(f'Session created : {session_name}')
+            if os.path.islink(CURRENT_SESSION_PATH):
+                os.remove(CURRENT_SESSION_PATH)
+            os.symlink(session_path, CURRENT_SESSION_PATH)
+            print(f'Session switched ==> {session_name}')
+    except OSError as e:
+        print(f'Switch sesssion {session_name} error: {e}')
+
+
+# {
+#   "model" : "deepseek-r1",
+#   "messages" : [{"role" : "...", "content" : "..."}]
+#  ... 
+# }
+def recover_dialog():
+    try:
+        session = load_session()
+        messages = session.get("messages", [])
+        if len(messages) == 0:
+            print('no message yet.')
+        for dialog in messages:
+            role = dialog["role"]
+            content = dialog["content"]
+            date = time.ctime(dialog['time'])
+            if role == "user":
+                print(f'🙋‍♂️: {GREY}{BOLD}{content[:-2]}{RESET}')
+                print('='*100)
+            else:
+                model = dialog['model']
+                print(f'🤖{YELLOW}{BOLD}({model}){ITALIC}[{date}]{RESET}:')
+                lines = content.split('\n')
+                for line in lines:
+                    print(parse_markdown(line))
+                print('*'*100)
+                print('\n\n')
+    except OSError as e:
+        print(f'Recover dialog error: {e}')
+
+
+def current_time():
+    return time.time()
+
+
+def fzf_select_session():
+    if not os.path.exists(SESSION_DIR):
+        return None
+    fzf = FzfPrompt()
+    selected = fzf.prompt(os.listdir(SESSION_DIR))
+    if len(selected) != 0:
+        return selected[0]
+    else:
+        return None
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -59,19 +173,26 @@ def parse_args():
     parser.add_argument('-m', '--model', 
                        default=model_default,
                        help=f'LLM model (default: {model_default})')
+    parser.add_argument('-s', '--session',
+                       help=f'Switch session')
+    parser.add_argument('-S', '--select',
+                       action='store_true',
+                       help=f'Select session')
+    parser.add_argument('-c', '--clean',
+                       help=f'Clear session (default all)')
+    parser.add_argument('-r', '--recover',
+                       action='store_true',
+                       help=f'Recover session dialog')
+    parser.add_argument('-h', '--help',
+                       action='store_true',
+                       help='Show help message')
+    parser.add_argument('--plain',
+                       action='store_true',
+                       help='Plain text output')
     parser.add_argument('-d', '--prompt',
                        nargs=argparse.REMAINDER,  # capture all args left
                        required=False,
                        help='Task description/prompt')
-    parser.add_argument('--plain',
-                       action='store_true',
-                       help='Plain text output')
-    parser.add_argument('--clean',
-                       action='store_true',
-                       help='Clear session history')
-    parser.add_argument('-h', '--help',
-                       action='store_true',
-                       help='Show help message')
     
     args = parser.parse_args()
     
@@ -136,19 +257,21 @@ def process_request(model, api_key, prompt_text, input_data, plain):
     )
 
     session = load_session()
-    messages = session.get(model, [])
+    messages = session.get("messages", [])
     
     if prompt_text is not None:
         full_prompt = f"{prompt_text}:\n{input_data}"
     else:
         full_prompt = input_data
 
-    messages.append({"role": "user", "content": full_prompt})
+    request_messages = [{"role" : x["role"], "content" : x["content"]} for x in messages]
+    request_messages.append({"role": "user", "content": full_prompt})
+    messages.append({"role": "user", "content": full_prompt, "time" : current_time()})
 
     try:
         completion = client.chat.completions.create(
             model=model,
-            messages=messages,
+            messages=request_messages,
             stream=True,
             extra_body={
                 "result_format": "message",
@@ -160,8 +283,12 @@ def process_request(model, api_key, prompt_text, input_data, plain):
         response_content = print_response_text()
 
         # save session
-        messages.append({"role": "assistant", "content": response_content})
-        session[model] = messages
+        messages.append({
+            "role": "assistant",
+            "content": response_content,
+            "model" : model,
+            "time" : current_time()})
+        session["messages"] = messages
         save_session(session)
         
     except Exception as e:
@@ -177,15 +304,30 @@ Usage:
   ag [options]
 
 Options:
-  -m, --model MODEL   Specify LLM model (default: deepseek-r1)
-  -d, --prompt PROMPT Task description/prompt (required)
-  --plain             Plain text output
-  --clean             Clear session history
-  -h, --help          Show this help message
+  -m, --model MODEL     Specify LLM model (default: deepseek-r1)
+  -d, --prompt PROMPT   Task description/prompt (required)
+  -s, --session SESSION Switch to or create a new session to use
+  -S, --select SESSION  Select session to use
+  -r, --recover         Recover dialog in current session
+  -c, --clean SESSION   Clear session history
+  --plain               Plain text output
+  -h, --help            Show this help message
 
 Examples:
-  man read | ag -d "Translate to Chinese"
-  ag --model gpt-o1 -d "Explain quantum computing"
+  Basics:
+    man read | ag -d "Translate to Chinese"
+    ag --model gpt-o1 -d "Explain quantum computing"
+
+  Switch sessions:
+    ag -s machine_learning
+    ag -d what is machine learning
+    ag -d tell me some algorithms about machine learning
+    clear && ag -s rust_dev
+    ag -d tell me how to install rust on archlinux
+    clear && ag -s machine_learning
+    ag --recover
+    ag --clean=all
+
 
 Available Models:
   deepseek-r1 (default)
@@ -212,13 +354,14 @@ def parse_markdown(line):
     def style_url(match):
         text = match.group(1)  # Group 1: text inside brackets
         url = match.group(2)   # Group 2: URL inside parentheses
-        return f"{GREY}[{text}]{BLUE}{ITALIC}({url}){RESET}"  # Wrap URL in blue
+        return f"{RED}[{text}]{BLUE}{ITALIC}({url}){RESET}"  # Wrap URL in blue
 
     # Codeblocks styling has highest priority
-    if line.startswith('```'):
+    #if line.startswith('```'):
+    if re.match(r'^\s*```(.*)$', line):
         in_codeblocks = not in_codeblocks
     if in_codeblocks:
-        return f"{ITALIC}{line}{RESET}"
+        return f"{ITALIC}{GREEN}{line}{RESET}"
 
     # Apply headline styling
     for pattern, color in headline_patterns.items():
@@ -267,23 +410,39 @@ def signal_handler(signum, frame):
 def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+    
+    # check storage for cache
+    if not os.path.isdir(SESSION_DIR):
+        os.makedirs(SESSION_DIR)
+    if not os.path.isfile(CURRENT_SESSION_PATH):
+        switch_session(DEFAULT_SESSION)
 
     args = parse_args()
+    # read stdin pipe input
+    if not sys.stdin.isatty():
+        input_data = sys.stdin.read()
+    else:
+        input_data = ''
     
     if args.help:
         show_help()
         sys.exit()
         
     if args.clean:
-        clean_session()
-        print("Session history cleared")
+        clean_session(get_session_name(args.clean, args.prompt, input_data))
         sys.exit()
 
-    # read stdin pipe input
-    if not sys.stdin.isatty():
-        input_data = sys.stdin.read()
-    else:
-        input_data = ''
+    if args.session:
+        switch_session(args.session)
+        sys.exit()
+
+    if args.select:
+        switch_session(get_session_name(None, args.prompt, input_data))
+        sys.exit()
+
+    if args.recover:
+        recover_dialog()
+        sys.exit()
         
     # if no input given
     if len(input_data) == 0 and args.prompt is None:
