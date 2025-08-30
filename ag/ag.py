@@ -34,9 +34,10 @@ in_codeblocks = False
 
 # session management (multiple sessions records save to /tmp/.ag/$USER)
 DEFAULT_SESSION = "DEFAULT_SESSION"
-SESSION_DIR = os.path.join("/tmp",".ag", os.getenv("USER"), "sessions")
+HOME_DIR = os.getenv("HOME")
+SESSION_DIR = os.path.join(HOME_DIR,".ag", os.getenv("USER"), "sessions")
 # symlink /tmp/.ag/$USER/CURRENT_SESSION ===> /tmp/.ag/$USER/sessions/{SESSION_NAME}
-CURRENT_SESSION_PATH = os.path.join("/tmp", ".ag", os.getenv("USER"), "CURRENT_SESSION")
+CURRENT_SESSION_PATH = os.path.join(HOME_DIR, ".ag", os.getenv("USER"), "CURRENT_SESSION")
 
 def load_session():
     if os.path.exists(CURRENT_SESSION_PATH):
